@@ -14,7 +14,7 @@ def _req(model: str, **kw) -> dict:
     req = {"model": model,
            "messages": [{"role": "user", "content": "Say OK and nothing else."}],
            "max_tokens": 16,
-           "thinking": {"type": "disabled"}}
+           "thinking": {"type": "enabled"}}
     req.update(kw)
     return req
 

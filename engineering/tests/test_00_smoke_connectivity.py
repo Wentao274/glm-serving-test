@@ -27,7 +27,7 @@ class TestSmokeConnectivity:
             "model": client.model,
             "messages": [{"role": "user", "content": "Say OK and nothing else."}],
             "max_tokens": 64,
-            "thinking": {"type": "disabled"},
+            "thinking": {"type": "enabled"},
         }
         result = client.chat(req)
         rec.attach_result(req, result, client.chat_completions_url, client.masked_headers())

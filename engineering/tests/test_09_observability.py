@@ -8,7 +8,7 @@ def _req(model: str) -> dict:
         "model": model,
         "messages": [{"role": "user", "content": "Say OK and nothing else."}],
         "max_tokens": 16,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
     }
 
 

@@ -16,7 +16,7 @@ def _counting_req(model: str, target: int) -> dict:
         "model": model,
         "messages": [{"role": "user", "content":
                       f"请从 1 开始数到 {target}，每个数字独占一行，不要输出任何其他内容，中途不要停止。"}],
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
         "temperature": 0.6,
         "stream": True,
         "stream_options": {"include_usage": True},

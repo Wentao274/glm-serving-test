@@ -1,8 +1,19 @@
-"""#2 usage 字段：必须返回 prompt_tokens、completion_tokens、cached_tokens。"""
+"""#2 usage 字段：必须返回 prompt_tokens、completion_tokens、cached_tokens。
+
+cached_tokens 允许两种返回位置（OpenAI 约定）：
+顶层 usage.cached_tokens 或 usage.prompt_tokens_details.cached_tokens。
+"""
 
 from __future__ import annotations
 
 _REQUIRED = ("prompt_tokens", "completion_tokens", "cached_tokens")
+
+
+def _has_cached(usage: dict) -> bool:
+    if "cached_tokens" in usage:
+        return True
+    details = usage.get("prompt_tokens_details")
+    return isinstance(details, dict) and "cached_tokens" in details
 
 
 def _req(model: str, stream: bool = False) -> dict:
@@ -10,7 +21,7 @@ def _req(model: str, stream: bool = False) -> dict:
         "model": model,
         "messages": [{"role": "user", "content": "Say OK and nothing else."}],
         "max_tokens": 64,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
     }
     if stream:
         req["stream"] = True
@@ -20,12 +31,20 @@ def _req(model: str, stream: bool = False) -> dict:
 
 def _check_usage(rec, usage: dict, label: str) -> None:
     missing = [k for k in _REQUIRED if k not in usage]
-    rec.expect(f"{label} usage 含全部必需字段（{','.join(_REQUIRED)}）",
+    if "cached_tokens" in missing and _has_cached(usage):
+        missing.remove("cached_tokens")
+    rec.expect(f"{label} usage 含全部必需字段（{','.join(_REQUIRED)}，cached 允许 details 位置）",
                not missing, f"missing={missing}; usage={usage}")
-    for k in _REQUIRED:
+    for k in ("prompt_tokens", "completion_tokens"):
         if k in usage:
             rec.expect(f"{label} {k} 为整数", isinstance(usage[k], int) and not isinstance(usage[k], bool),
                        f"{k}={usage[k]!r}")
+    if _has_cached(usage):
+        cached = usage.get("cached_tokens")
+        if cached is None:
+            cached = usage["prompt_tokens_details"]["cached_tokens"]
+        rec.expect(f"{label} cached_tokens 为整数", isinstance(cached, int) and not isinstance(cached, bool),
+                   f"cached_tokens={cached!r}")
 
 
 def test_02_usage_fields_nonstream(client, rec):

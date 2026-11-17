@@ -13,7 +13,7 @@ def _req(model: str, response_format: dict, max_tokens: int = 1024) -> dict:
         "messages": [{"role": "user", "content":
                       '请用 JSON 回答：{"name": "glm", "tags": ["a", "b"], "score": 9.5} 这个对象包含哪些键？'}],
         "max_tokens": max_tokens,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
         "response_format": response_format,
     }
 

@@ -10,7 +10,7 @@ def _req(model: str, stream: bool, max_tokens: int = 128, temp_zero: bool = True
         "model": model,
         "messages": [{"role": "user", "content": "请从 1 数到 10，每个数字独占一行。"}],
         "max_tokens": max_tokens,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
     }
     if temp_zero:
         req["temperature"] = 0.6

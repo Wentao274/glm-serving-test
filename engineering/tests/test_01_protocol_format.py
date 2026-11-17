@@ -10,7 +10,7 @@ def _req(model: str, stream: bool = False) -> dict:
         "model": model,
         "messages": [{"role": "user", "content": "Say OK and nothing else."}],
         "max_tokens": 64,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
     }
     if stream:
         req["stream"] = True

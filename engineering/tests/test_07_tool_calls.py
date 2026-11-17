@@ -57,7 +57,7 @@ def test_07_single_tool_call(client, rec):
         "tools": _TOOLS,
         "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
         "max_tokens": 1024,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
     }
     result = client.chat(req)
     rec.attach_result(req, result, client.chat_completions_url, client.masked_headers())
@@ -80,7 +80,7 @@ def test_07_multi_tools_available(client, rec):
         "tools": _TOOLS,
         "tool_choice": "auto",
         "max_tokens": 1024,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
     }
     result = client.chat(req)
     rec.attach_result(req, result, client.chat_completions_url, client.masked_headers())
@@ -103,7 +103,7 @@ def test_07_parallel_tool_calls(client, rec):
         "tools": _TOOLS,
         "tool_choice": "auto",
         "max_tokens": 2048,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
     }
     result = client.chat(req)
     rec.attach_result(req, result, client.chat_completions_url, client.masked_headers())
@@ -124,7 +124,7 @@ def test_07_tool_call_stream(client, rec):
         "tools": _TOOLS,
         "tool_choice": "auto",
         "max_tokens": 1024,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
         "stream": True,
         "stream_options": {"include_usage": True},
     }

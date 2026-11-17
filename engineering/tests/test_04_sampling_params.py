@@ -9,7 +9,7 @@ _PROMPT = [{"role": "user", "content": "Say 'OK' and nothing else."}]
 
 def _req(model: str, extra: dict | None = None) -> dict:
     req = {"model": model, "messages": _PROMPT, "max_tokens": 32,
-           "thinking": {"type": "disabled"}}
+           "thinking": {"type": "enabled"}}
     if extra:
         req.update(extra)
     return req
@@ -79,9 +79,9 @@ def test_04_max_tokens_behavior_vs_official(client, rec, official_client, settin
         pytest.skip("未配置 --official-base-url/--official-api-key/--official-model")
     prompt = [{"role": "user", "content": "请从 1 数到 500，每个数字独占一行。"}]
     req_v = {"model": client.model, "messages": prompt, "max_tokens": 48,
-             "thinking": {"type": "disabled"}}
+             "thinking": {"type": "enabled"}}
     req_o = {"model": settings.official_model, "messages": prompt, "max_tokens": 48,
-             "thinking": {"type": "disabled"}}
+             "thinking": {"type": "enabled"}}
     res_v = client.chat(req_v)
     rec.attach_result(req_v, res_v, client.chat_completions_url, client.masked_headers())
     res_o = official_client.chat(req_o)
