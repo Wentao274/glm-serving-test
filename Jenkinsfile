@@ -42,6 +42,17 @@ pipeline {
         stage('打印测试参数') {
             steps {
                 script {
+                    // 参数防呆：-k 过滤必须是 pytest -k 表达式（用例名/编号与 and/or/not 组合），
+                    // 不接受自由文本（常见误填：把描述句子填进 FILTER）
+                    def validateKExpr = { String name, String val ->
+                        if (val?.trim() && !(val ==~ /^[A-Za-z0-9_\.\[\]"'\s\(\)\-]+$/)) {
+                            error("参数 ${name} 不是合法的 pytest -k 表达式: '${val}'。" +
+                                  "-k 按用例名过滤，示例: test_05、test_05 or test_12、not test_05。" +
+                                  "描述性文字请填 DESCRIPTION 参数；全量执行请留空。")
+                        }
+                    }
+                    validateKExpr('ENG_FILTER', params.ENG_FILTER)
+                    validateKExpr('COMPARE_FILTER', params.COMPARE_FILTER)
                     println("========================================")
                     println("=== GLM-5.3 功能兼容性验收测试参数 ===")
                     println("========================================")
@@ -117,30 +128,53 @@ set -e
 cd ${params.WORK_DIR}
 echo "工作目录: \$(pwd)"
 
-echo "=== 清理残留测试进程 ==="
-RESIDUAL=\$(pgrep -af "run_tests\\.py|run_suite\\.sh" 2>/dev/null | grep -vE "jenkins|durable|@tmp" || true)
-if [ -n "\${RESIDUAL}" ]; then
-    echo "发现残留进程:"
-    echo "\${RESIDUAL}"
-    echo "\${RESIDUAL}" | awk '{print \$1}' | xargs -r kill -TERM 2>/dev/null || true
+echo "=== 清理残留测试进程（仅限本仓库 ${params.WORK_DIR}）==="
+# 唯一性筛选：进程名匹配后，必须再核对进程工作目录(/proc/<pid>/cwd)属于
+# 本仓库 WORK_DIR，避免误杀其他仓库同名脚本(run_tests.py/run_suite.sh)进程
+kill_repo_residual() {
+    FOUND=""
+    for PID in \$(pgrep -f "run_tests\\.py|run_suite\\.sh" 2>/dev/null | grep -vE "jenkins|durable|@tmp" || true); do
+        PCWD=\$(readlink "/proc/\${PID}/cwd" 2>/dev/null || true)
+        case "\${PCWD}" in
+            ${params.WORK_DIR}|${params.WORK_DIR}/*)
+                FOUND="\${FOUND} \${PID}"
+                ;;
+            *)
+                [ -n "\${PCWD}" ] && echo "跳过非本仓库进程: pid=\${PID} cwd=\${PCWD}"
+                ;;
+        esac
+    done
+    if [ -n "\${FOUND}" ]; then
+        echo "本仓库残留进程:\${FOUND}"
+        echo "\${FOUND}" | xargs -r kill "\$1" 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+if kill_repo_residual -TERM; then
     sleep 3
-    REMAINING=\$(pgrep -af "run_tests\\.py|run_suite\\.sh" 2>/dev/null | grep -vE "jenkins|durable|@tmp" || true)
-    if [ -n "\${REMAINING}" ]; then
-        echo "未响应 SIGTERM,发送 SIGKILL..."
-        echo "\${REMAINING}" | awk '{print \$1}' | xargs -r kill -KILL 2>/dev/null || true
+    if kill_repo_residual -KILL; then
         sleep 1
     fi
     echo "残留进程清理完成"
 else
-    echo "未发现残留进程"
+    echo "未发现本仓库残留进程"
 fi
 
 echo "=== 同步代码 ==="
 mkdir -p ${BUILD_OUTPUT_DIR}
 BEFORE=\$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 echo "同步前代码: \${BEFORE}"
-SYNC_STATUS="ok"
-git pull --ff-only || SYNC_STATUS="failed"
+# TLS/网络抖动常见，重试 3 次后才认定同步失败
+SYNC_STATUS="failed"
+for i in 1 2 3; do
+    if git pull --ff-only; then
+        SYNC_STATUS="ok"
+        break
+    fi
+    echo "git pull 第 \${i} 次失败，5s 后重试..."
+    sleep 5
+done
 AFTER=\$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 echo "同步后代码: \${AFTER} (git pull: \${SYNC_STATUS})"
 {
