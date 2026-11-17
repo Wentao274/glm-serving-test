@@ -225,6 +225,7 @@ __marimo__/
 # 测试报告输出
 reports/
 test-results/
+builds/
 
 # 本地 IDE 配置
 .idea/
