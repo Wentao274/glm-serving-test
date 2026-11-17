@@ -7,7 +7,7 @@ import json
 import pytest
 
 
-def _req(model: str, response_format: dict, max_tokens: int = 1024) -> dict:
+def _req(model: str, response_format: dict, max_tokens: int = 4096) -> dict:
     return {
         "model": model,
         "messages": [{"role": "user", "content":

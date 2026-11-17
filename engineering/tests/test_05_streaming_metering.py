@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 
-def _req(model: str, stream: bool, max_tokens: int = 128, temp_zero: bool = True) -> dict:
+def _req(model: str, stream: bool, max_tokens: int = 2048, temp_zero: bool = True) -> dict:
     req = {
         "model": model,
         "messages": [{"role": "user", "content": "请从 1 数到 10，每个数字独占一行。"}],

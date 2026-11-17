@@ -344,6 +344,20 @@ fi
                             }
                         }
                         def compareSection = ''
+                        if (!cmp && params.COMPARE_OFFICIAL) {
+                            // 显式说明官方对比缺失原因，便于排查（不再静默省略）
+                            def reason = !params.OFFICIAL_BASE_URL?.trim() ? '未配置 OFFICIAL_BASE_URL'
+                                : !params.OFFICIAL_API_KEY?.toString()?.trim() ? '未配置 OFFICIAL_API_KEY'
+                                : !params.OFFICIAL_MODEL?.trim() ? '未配置 OFFICIAL_MODEL'
+                                : '官方执行阶段未产出 compare.properties（请查看「原厂渠道对比执行」阶段日志：gen_compare 是否执行、两侧报告是否生成）'
+                            compareSection = """
+<div style="background-color: #ff9800; color: white; padding: 12px 15px; border-radius: 4px; margin-bottom: 12px;">
+    <strong>官方对比未生成</strong>：COMPARE_OFFICIAL 已开启，但未找到对比结果。原因：${reason}。
+</div>"""
+                        } else if (!params.COMPARE_OFFICIAL) {
+                            compareSection = """
+<p style="color:#6b7280">官方对比未启用（COMPARE_OFFICIAL=false，如需双跑对比请开启并配置 OFFICIAL_*）。</p>"""
+                        }
                         if (cmp) {
                             compareSection = """
 <h2>供应商 vs 原厂 对比汇总</h2>

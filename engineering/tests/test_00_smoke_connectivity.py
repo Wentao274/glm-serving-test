@@ -26,7 +26,7 @@ class TestSmokeConnectivity:
         req = {
             "model": client.model,
             "messages": [{"role": "user", "content": "Say OK and nothing else."}],
-            "max_tokens": 64,
+            "max_tokens": 1024,
             "thinking": {"type": "enabled"},
         }
         result = client.chat(req)

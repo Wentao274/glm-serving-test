@@ -9,7 +9,7 @@ def _req(model: str, stream: bool = False) -> dict:
     req = {
         "model": model,
         "messages": [{"role": "user", "content": "Say OK and nothing else."}],
-        "max_tokens": 64,
+        "max_tokens": 2048,
         "thinking": {"type": "enabled"},
     }
     if stream:
