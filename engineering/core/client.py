@@ -116,7 +116,11 @@ class VendorClient:
     """指向供应商 endpoint 的 chat/completions 客户端。"""
 
     def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 600.0):
-        self.base_url = base_url.rstrip("/")
+        # 兼容传入完整 chat/completions 端点的写法（自动剥到 base）
+        base = base_url.rstrip("/")
+        if base.endswith("/chat/completions"):
+            base = base[: -len("/chat/completions")]
+        self.base_url = base
         self.api_key = api_key
         self.model = model
         self.timeout = timeout

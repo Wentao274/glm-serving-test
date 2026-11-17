@@ -25,6 +25,8 @@ uv venv --python 3.11
 uv pip install -r requirements.txt
 ```
 
+> **虚拟环境自举（无需手动建环境）**：只要系统有 uv，`run_tests.py` 与 `scripts/run_suite.sh` 会在 .venv 不存在时**自动创建并安装依赖、切换至 venv 解释器运行**——手动执行与 Jenkins 执行全周期均在 uv 虚拟环境内，不会落到系统 Python。
+
 通用配置：CLI 参数或环境变量 `KST_BASE_URL` / `KST_API_KEY` / `KST_MODEL`。
 
 ## 快速开始
@@ -62,6 +64,16 @@ python run_tests.py engineering \
 --official-base-url/--official-api-key/--official-model   #4 采样参数原厂对照（可选）
 --report-dir DIR          报告输出目录（默认 reports/）
 ```
+
+**原厂（智谱官方）对照配置示例**：
+
+```bash
+--official-base-url https://open.bigmodel.cn/api/paas/v4 \
+--official-api-key <智谱 API Key> \
+--official-model <原厂模型 id>
+```
+
+> URL 兼容说明：框架自动归一化 base url——已含版本路径（`/v1`、`/v4`）原样保留，否则补 `/v1`；误填完整端点 `.../chat/completions` 也会自动剥到 base（客户端同步兼容）。因此智谱的 `/api/paas/v4` 直接可用，无需手工改造。
 
 ## Jenkins 远程触发
 

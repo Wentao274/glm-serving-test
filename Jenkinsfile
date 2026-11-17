@@ -34,8 +34,8 @@ pipeline {
         REMOTE_USER = 'root'
         // 报告输出分层：builds/engineering/<tester>/<model>/<build号>/
         BUILD_OUTPUT_DIR = "builds/engineering/${params.TESTER}/${params.MODEL.replaceAll('[^A-Za-z0-9._-]', '_')}/${BUILD_NUMBER}"
-        // BASE_URL 幂等拼接 /v1
-        BASE_URL_V1 = "${params.BASE_URL.replaceAll('/+$', '').replaceAll('/?v1$', '')}/v1"
+        // BASE_URL 版本感知归一化（见文件底部 normalizeBaseUrl）
+        BASE_URL_V1 = "${normalizeBaseUrl(params.BASE_URL)}"
     }
 
     stages {
@@ -213,7 +213,7 @@ ENDSSH"""
                         println("=== COMPARE_OFFICIAL 已启用但 OFFICIAL_* 未完整配置，跳过原厂对比执行 ===")
                         return
                     }
-                    def officialBaseV1 = params.OFFICIAL_BASE_URL.replaceAll('/+$', '').replaceAll('/?v1$', '') + '/v1'
+                    def officialBaseV1 = normalizeBaseUrl(params.OFFICIAL_BASE_URL)
                     def officialKey = params.OFFICIAL_API_KEY.toString().trim()
                     def engFilter = (params.COMPARE_OFFICIAL && params.COMPARE_FILTER?.trim()) ? params.COMPARE_FILTER : params.ENG_FILTER
                     sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
@@ -421,4 +421,14 @@ ENDSSH"""
             cleanWs()
         }
     }
+}
+
+// BASE_URL 版本感知归一化：已含版本路径（/v1、/v4 等，如智谱 https://open.bigmodel.cn/api/paas/v4）
+// 则保持；否则补 /v1；同时剥掉误填的 /chat/completions 后缀
+def normalizeBaseUrl(String url) {
+    def u = (url ?: '').replaceAll('/+$', '').replaceAll('/chat/completions$', '')
+    if (!u) {
+        return u
+    }
+    return (u =~ /\/v\d+$/).matches() ? u : (u + '/v1')
 }

@@ -6,6 +6,16 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# .venv 不存在且 uv 可用时自动创建并安装依赖，保证全周期在虚拟环境内运行
+if [ ! -d ".venv" ]; then
+    if command -v uv >/dev/null 2>&1; then
+        echo "[run_suite] .venv 不存在，使用 uv 自动创建虚拟环境..."
+        uv venv
+        uv pip install -r requirements.txt
+    else
+        echo "[run_suite] 警告: .venv 不存在且未找到 uv，将使用系统 python 运行" >&2
+    fi
+fi
 if [ -d ".venv" ]; then
     # shellcheck disable=SC1091
     source .venv/bin/activate
