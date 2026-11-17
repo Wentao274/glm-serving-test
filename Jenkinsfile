@@ -1,0 +1,424 @@
+pipeline {
+    agent {
+        label 'master'
+    }
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(name: 'TESTER', defaultValue: 'liwt', description: '测试人员名称（必填）')
+        string(name: 'MODEL', defaultValue: 'glm-5.3', description: '被测供应商模型名（必填，即 /v1/models 返回的 id 或供应商约定名）')
+        string(name: 'BASE_URL', defaultValue: 'https://vendor.example.com', description: '供应商 API 根地址（必填，可不带 /v1，流水线自动拼接）')
+        password(name: 'API_KEY', defaultValue: '', description: '供应商 API Key（必填）')
+
+        // ---------------- 工程验收参数 ----------------
+        string(name: 'ENG_FILTER', defaultValue: '', description: 'pytest -k 过滤表达式（空=全量），如 "test_07"、"test_05 or test_06"')
+        booleanParam(name: 'INCLUDE_HEAVY', defaultValue: false, description: '运行重负载用例（#10 完整 1 小时流式保活验证）')
+        string(name: 'OFFICIAL_BASE_URL', defaultValue: '', description: '原厂 API 根地址（可选，用于 #4 采样参数对照与 COMPARE_OFFICIAL 双跑）')
+        password(name: 'OFFICIAL_API_KEY', defaultValue: '', description: '原厂 API Key（可选）')
+        string(name: 'OFFICIAL_MODEL', defaultValue: '', description: '原厂模型名（可选）')
+        booleanParam(name: 'COMPARE_OFFICIAL', defaultValue: false, description: '开启后全量用例在原厂渠道再跑一遍并逐用例对比（默认不比对；需配置 OFFICIAL_*）')
+        string(name: 'COMPARE_FILTER', defaultValue: '', description: '对比模式的用例范围（-k 表达式，空=全量；设置后两侧均按此范围执行。示例："test_05 or test_07" 只对比流式计量与工具调用）')
+
+        // ---------------- 通用 ----------------
+        string(name: 'DESCRIPTION', defaultValue: '', description: '被测服务的描述信息（仅用于邮件展示）')
+        text(name: 'RECIPIENTS', defaultValue: 'liwt@zetyun.com', description: '测试报告邮件接收者（逗号分隔）')
+        string(name: 'WORK_DIR', defaultValue: '/dingofs/data2/userdata/liwt/maas-image/glm-serving-test', description: '远程测试机上的仓库目录，请不要改动')
+    }
+
+    environment {
+        SSH_CREDENTIALS = 'HOST_SSH_KEY'
+        REMOTE_HOST = '10.201.132.50'
+        REMOTE_USER = 'root'
+        // 报告输出分层：builds/engineering/<tester>/<model>/<build号>/
+        BUILD_OUTPUT_DIR = "builds/engineering/${params.TESTER}/${params.MODEL.replaceAll('[^A-Za-z0-9._-]', '_')}/${BUILD_NUMBER}"
+        // BASE_URL 幂等拼接 /v1
+        BASE_URL_V1 = "${params.BASE_URL.replaceAll('/+$', '').replaceAll('/?v1$', '')}/v1"
+    }
+
+    stages {
+        stage('打印测试参数') {
+            steps {
+                script {
+                    println("========================================")
+                    println("=== GLM-5.3 功能兼容性验收测试参数 ===")
+                    println("========================================")
+                    println("测试人员:     ${params.TESTER}")
+                    println("模型名称:     ${params.MODEL}")
+                    println("BASE_URL:     ${params.BASE_URL}  (→ ${env.BASE_URL_V1})")
+                    println("用例过滤:     ${params.ENG_FILTER ?: '(全量)'}")
+                    println("重负载用例:   ${params.INCLUDE_HEAVY}")
+                    println("原厂对照:     ${params.OFFICIAL_BASE_URL ? params.OFFICIAL_BASE_URL : '(不启用)'}")
+                    println("原厂双跑对比: ${params.COMPARE_OFFICIAL ? "开启（范围: ${params.COMPARE_FILTER ?: '(全量)'}）" : '关闭'}")
+                    println("服务描述:     ${params.DESCRIPTION ?: '(无)'}")
+                    println("邮件接收者:   ${params.RECIPIENTS}")
+                    println("工作目录:     ${params.WORK_DIR}")
+                    println("构建编号:     #${BUILD_NUMBER}")
+                    println("========================================")
+                }
+            }
+        }
+
+        stage('API 连通性预检') {
+            steps {
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    script {
+                        def apiKey = params.API_KEY?.toString()?.trim()
+                        if (!apiKey) { apiKey = 'EMPTY' }
+                        try {
+                            sh """
+ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} << 'ENDSSH'
+set -o pipefail
+{
+    echo "=== 检查 API 连通性 (/v1/models) ==="
+    HTTP_CODE=\$(curl -s --connect-timeout 10 -m 30 -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${apiKey}" ${env.BASE_URL_V1}/models)
+    if [ "\${HTTP_CODE}" != "200" ]; then
+        echo "ERROR: API 连通性检查失败, HTTP状态码: \${HTTP_CODE}, URL: ${env.BASE_URL_V1}/models"
+        exit 1
+    fi
+    echo "API /models 连通性检查通过, HTTP状态码: \${HTTP_CODE}"
+
+    echo "=== 检查 Chat Completions 接口 ==="
+    CHAT_RESP=\$(curl -s --connect-timeout 10 -m 60 -w "\\n%{http_code}" ${env.BASE_URL_V1}/chat/completions \\
+        -H "Content-Type: application/json" \\
+        -H "Authorization: Bearer ${apiKey}" \\
+        -d '{"model":"${params.MODEL}","messages":[{"role":"user","content":"hello"}],"max_tokens":10}')
+    CHAT_HTTP_CODE=\$(echo "\${CHAT_RESP}" | tail -1)
+    if [ "\${CHAT_HTTP_CODE}" != "200" ]; then
+        echo "ERROR: Chat Completions 接口检查失败, HTTP状态码: \${CHAT_HTTP_CODE}"
+        echo "响应内容: \$(echo "\${CHAT_RESP}" | head -n -1)"
+        exit 1
+    fi
+    echo "Chat Completions 接口检查通过, HTTP状态码: \${CHAT_HTTP_CODE}"
+} 2>&1 | tee /tmp/gst_connectivity_${BUILD_NUMBER}.log
+ENDSSH
+"""
+                        } catch (Exception e) {
+                            env.CONNECTIVITY_FAILED = 'true'
+                            currentBuild.result = 'UNSTABLE'
+                            println("=== API 连通性预检失败,后续阶段将跳过 ===")
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('环境检查') {
+            when {
+                expression { env.CONNECTIVITY_FAILED != 'true' }
+            }
+            steps {
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    sh """
+ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} << 'ENDSSH'
+set -e
+cd ${params.WORK_DIR}
+echo "工作目录: \$(pwd)"
+
+echo "=== 清理残留测试进程 ==="
+RESIDUAL=\$(pgrep -af "run_tests\\.py|run_suite\\.sh" 2>/dev/null | grep -vE "jenkins|durable|@tmp" || true)
+if [ -n "\${RESIDUAL}" ]; then
+    echo "发现残留进程:"
+    echo "\${RESIDUAL}"
+    echo "\${RESIDUAL}" | awk '{print \$1}' | xargs -r kill -TERM 2>/dev/null || true
+    sleep 3
+    REMAINING=\$(pgrep -af "run_tests\\.py|run_suite\\.sh" 2>/dev/null | grep -vE "jenkins|durable|@tmp" || true)
+    if [ -n "\${REMAINING}" ]; then
+        echo "未响应 SIGTERM,发送 SIGKILL..."
+        echo "\${REMAINING}" | awk '{print \$1}' | xargs -r kill -KILL 2>/dev/null || true
+        sleep 1
+    fi
+    echo "残留进程清理完成"
+else
+    echo "未发现残留进程"
+fi
+
+echo "=== 同步代码 ==="
+mkdir -p ${BUILD_OUTPUT_DIR}
+BEFORE=\$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+echo "同步前代码: \${BEFORE}"
+SYNC_STATUS="ok"
+git pull --ff-only || SYNC_STATUS="failed"
+AFTER=\$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+echo "同步后代码: \${AFTER} (git pull: \${SYNC_STATUS})"
+{
+    echo "githash=\${AFTER}"
+    echo "gitbefore=\${BEFORE}"
+    echo "gitsync=\${SYNC_STATUS}"
+} > ${BUILD_OUTPUT_DIR}/code_version.properties
+if [ "\${SYNC_STATUS}" = "failed" ]; then
+    echo "警告: git pull 失败，本次将使用旧代码 \${AFTER} 继续测试（结果按旧代码口径）"
+fi
+
+echo "=== 检查并创建虚拟环境 ==="
+if [ ! -d ".venv" ]; then
+    echo "虚拟环境不存在，创建虚拟环境..."
+    uv venv
+fi
+source .venv/bin/activate
+uv pip install -r requirements.txt
+deactivate
+echo "=== 环境检查完成 ==="
+ENDSSH"""
+                }
+            }
+        }
+
+        stage('运行功能兼容性验收') {
+            when {
+                expression { env.CONNECTIVITY_FAILED != 'true' }
+            }
+            steps {
+                script {
+                    def apiKey = params.API_KEY?.toString()?.trim()
+                    if (!apiKey) { apiKey = 'EMPTY' }
+                    def officialKey = params.OFFICIAL_API_KEY?.toString()?.trim() ?: ''
+                    def engFilter = (params.COMPARE_OFFICIAL && params.COMPARE_FILTER?.trim()) ? params.COMPARE_FILTER : params.ENG_FILTER
+                    sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                            sh """
+ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} << 'ENDSSH'
+set -e
+cd ${params.WORK_DIR}
+mkdir -p ${BUILD_OUTPUT_DIR}
+
+export SUITE="engineering"
+export KST_BASE_URL="${env.BASE_URL_V1}"
+export KST_API_KEY="${apiKey}"
+export KST_MODEL="${params.MODEL}"
+export KST_OUT_DIR="${params.WORK_DIR}/${BUILD_OUTPUT_DIR}"
+export ENG_FILTER="${engFilter}"
+export ENG_INCLUDE_HEAVY="${params.INCLUDE_HEAVY}"
+export OFFICIAL_BASE_URL="${params.OFFICIAL_BASE_URL}"
+export OFFICIAL_API_KEY="${officialKey}"
+export OFFICIAL_MODEL="${params.OFFICIAL_MODEL}"
+
+bash scripts/run_suite.sh
+ENDSSH"""
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('原厂渠道对比执行') {
+            when {
+                expression { env.CONNECTIVITY_FAILED != 'true' && params.COMPARE_OFFICIAL }
+            }
+            steps {
+                script {
+                    if (!params.OFFICIAL_BASE_URL?.trim() || !params.OFFICIAL_API_KEY?.toString()?.trim() || !params.OFFICIAL_MODEL?.trim()) {
+                        println("=== COMPARE_OFFICIAL 已启用但 OFFICIAL_* 未完整配置，跳过原厂对比执行 ===")
+                        return
+                    }
+                    def officialBaseV1 = params.OFFICIAL_BASE_URL.replaceAll('/+$', '').replaceAll('/?v1$', '') + '/v1'
+                    def officialKey = params.OFFICIAL_API_KEY.toString().trim()
+                    def engFilter = (params.COMPARE_OFFICIAL && params.COMPARE_FILTER?.trim()) ? params.COMPARE_FILTER : params.ENG_FILTER
+                    sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                            sh """
+ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} << 'ENDSSH'
+set -e
+cd ${params.WORK_DIR}
+mkdir -p ${BUILD_OUTPUT_DIR}/official
+
+export SUITE="engineering"
+export KST_BASE_URL="${officialBaseV1}"
+export KST_API_KEY="${officialKey}"
+export KST_MODEL="${params.OFFICIAL_MODEL}"
+export KST_OUT_DIR="${params.WORK_DIR}/${BUILD_OUTPUT_DIR}/official"
+export ENG_FILTER="${engFilter}"
+export ENG_INCLUDE_HEAVY="${params.INCLUDE_HEAVY}"
+
+bash scripts/run_suite.sh
+
+python scripts/gen_compare.py ${BUILD_OUTPUT_DIR}
+ENDSSH"""
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('拉取报告到Jenkins') {
+            when {
+                expression { env.CONNECTIVITY_FAILED != 'true' }
+            }
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                        sh """
+mkdir -p reports/${BUILD_NUMBER}
+if ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "[ -d ${params.WORK_DIR}/${BUILD_OUTPUT_DIR} ]"; then
+    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "tar -czf /tmp/gst_${BUILD_NUMBER}.tar.gz -C ${params.WORK_DIR}/${BUILD_OUTPUT_DIR} ."
+    scp -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST}:/tmp/gst_${BUILD_NUMBER}.tar.gz ./reports/${BUILD_NUMBER}/
+    tar -xzf ./reports/${BUILD_NUMBER}/gst_${BUILD_NUMBER}.tar.gz -C ./reports/${BUILD_NUMBER}/
+    ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} "rm -f /tmp/gst_${BUILD_NUMBER}.tar.gz"
+    echo "=== 拉取结果 ==="
+    ls -la ./reports/${BUILD_NUMBER}/
+else
+    echo "警告: 远程输出目录 ${params.WORK_DIR}/${BUILD_OUTPUT_DIR} 不存在，跳过报告拉取"
+fi
+"""
+                    }
+                }
+            }
+        }
+
+        stage('发送邮件') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    script {
+                        def stats = [:]
+                        def statsFile = "reports/${BUILD_NUMBER}/stats.properties"
+                        if (fileExists(statsFile)) {
+                            readFile(file: statsFile, encoding: 'UTF-8').split('\n').each { line ->
+                                def matcher = line.trim() =~ /^([A-Za-z]+)=(.*)$/
+                                if (matcher.matches()) {
+                                    stats[matcher.group(1)] = matcher.group(2)
+                                }
+                            }
+                        }
+
+                        // 测试代码版本（git pull 同步结果）
+                        def codeVer = [:]
+                        def codeVerFile = "reports/${BUILD_NUMBER}/code_version.properties"
+                        if (fileExists(codeVerFile)) {
+                            readFile(file: codeVerFile, encoding: 'UTF-8').split('\n').each { line ->
+                                def m = line.trim() =~ /^([A-Za-z]+)=(.*)$/
+                                if (m.matches()) {
+                                    codeVer[m.group(1)] = m.group(2)
+                                }
+                            }
+                        }
+                        def gitSyncFailed = (codeVer.gitsync == 'failed')
+
+                        // 供应商 vs 原厂 对比汇总
+                        def cmp = [:]
+                        def cmpFile = "reports/${BUILD_NUMBER}/compare.properties"
+                        if (fileExists(cmpFile)) {
+                            readFile(file: cmpFile, encoding: 'UTF-8').split('\n').each { line ->
+                                def m = line.trim() =~ /^([A-Za-z]+)=(.*)$/
+                                if (m.matches()) {
+                                    cmp[m.group(1)] = m.group(2)
+                                }
+                            }
+                        }
+                        def compareSection = ''
+                        if (cmp) {
+                            compareSection = """
+<h2>供应商 vs 原厂 对比汇总</h2>
+<table>
+    <tr><th></th><th>总用例</th><th>通过</th><th>通过率</th></tr>
+    <tr><th>供应商</th><td>${cmp.vendortotal}</td><td>${cmp.vendorpassed}</td><td>${cmp.vendorrate}%</td></tr>
+    <tr><th>原厂</th><td>${cmp.officialtotal}</td><td>${cmp.officialpassed}</td><td>${cmp.officialrate}%</td></tr>
+    <tr><th>双边均通过</th><td colspan="2">${cmp.bothpass}</td></tr>
+    <tr><th>仅供应商失败</th><td colspan="2" style="color:#dc2626">${cmp.vendoronlyfail}</td></tr>
+    <tr><th>仅原厂失败</th><td colspan="2">${cmp.officialonlyfail}</td></tr>
+    <tr><th>双边均失败</th><td colspan="2">${cmp.bothfail}</td></tr>
+</table>
+<p>逐用例对比见附件 <strong>compare.html</strong>；两侧完整报告见附件（供应商 report.html / 原厂 report.html）。</p>"""
+                        }
+
+                        def reportFile = sh(script: "ls reports/${BUILD_NUMBER}/engineering_*/report.html 2>/dev/null | head -1", returnStdout: true).trim()
+
+                        def fallbackStyle = "body { font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif; margin: 0 auto; max-width: 1080px; padding: 20px 32px; color: #1f2937; background: #eef1f6; font-size: 14px; line-height: 1.7; }\ntable { border-collapse: collapse; width: 100%; margin: 14px 0 18px; background: #ffffff; font-size: 13px; border: 1px solid #d8dfeb; }\nth { background: #e3edfc; color: #1e3a8a; font-weight: 600; }\nth, td { border: 1px solid #d8dfeb; padding: 6px 12px; text-align: left; vertical-align: top; }\n.email-footer { margin-top: 24px; padding: 12px 15px; background-color: #f9f9f9; border-radius: 3px; color: #666; font-size: 12px; }"
+
+                        def connectivityFailed = (env.CONNECTIVITY_FAILED == 'true')
+                        def resultLabel = connectivityFailed ? '连通性预检未通过' : (stats.result ?: (currentBuild.currentResult == 'SUCCESS' ? 'PASS' : 'FAIL'))
+                        def rateLabel = stats.rate ? "${stats.rate}%" : 'N/A'
+                        def bannerColor = (resultLabel == 'PASS') ? '#4CAF50' : '#f44336'
+
+                        def emailBody = """
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+${fallbackStyle}
+</style>
+</head>
+<body>
+<div style="background-color: ${bannerColor}; color: white; padding: 18px 20px; border-radius: 5px 5px 0 0; margin-bottom: 10px;">
+    <h2 style="margin: 0;">GLM-5.3 功能兼容性验收报告 - 构建 #${BUILD_NUMBER}</h2>
+</div>
+${connectivityFailed ? '<div style="background-color: #d32f2f; color: white; padding: 12px 15px; border-radius: 4px; margin-bottom: 12px;"><strong>API 连通性预检未通过</strong>：本次构建未执行测试，请检查 BASE_URL / API_KEY，详见构建日志。</div>' : ''}
+${gitSyncFailed ? "<div style='background-color: #ff9800; color: white; padding: 12px 15px; border-radius: 4px; margin-bottom: 12px;'><strong>git pull 同步失败</strong>：本次测试基于旧代码 ${codeVer.githash} 执行（同步前 ${codeVer.gitbefore}），结果按旧代码口径，请知悉。</div>" : ''}
+<h2>Jenkins 构建信息</h2>
+<table>
+    <tr><th>构建编号</th><td>#${BUILD_NUMBER}</td></tr>
+    <tr><th>测试人员</th><td>${params.TESTER}</td></tr>
+    <tr><th>测试套件</th><td>功能兼容性验收 (engineering)</td></tr>
+    <tr><th>模型名称</th><td>${params.MODEL}</td></tr>
+    <tr><th>API 地址</th><td>${params.BASE_URL}</td></tr>
+    <tr><th>服务描述</th><td>${params.DESCRIPTION ?: '(无)'}</td></tr>
+    <tr><th>用例过滤</th><td>${params.ENG_FILTER ?: '(全量)'}</td></tr>
+    <tr><th>重负载用例</th><td>${params.INCLUDE_HEAVY}</td></tr>
+    <tr><th>用例总数</th><td>${stats.total ?: 'N/A'}</td></tr>
+    <tr><th>通过 / 失败</th><td>${stats.passed ?: 'N/A'} / ${stats.failed ?: 'N/A'}</td></tr>
+    <tr><th>跳过 / 错误</th><td>${stats.skipped ?: 'N/A'} / ${stats.errors ?: 'N/A'}</td></tr>
+    <tr><th>测试代码版本</th><td>${codeVer.githash ?: 'N/A'}${codeVer.gitsync ? "（git pull: ${codeVer.gitsync}）" : ''}</td></tr>
+    <tr><th>通过率</th><td>${rateLabel}</td></tr>
+    <tr><th>测试结果</th><td style="color: ${bannerColor}; font-weight: bold;">${resultLabel}</td></tr>
+    <tr><th>执行时间</th><td>${currentBuild.durationString}</td></tr>
+    <tr><th>构建状态</th><td>${currentBuild.currentResult}</td></tr>
+</table>
+${compareSection}
+${reportFile && fileExists(reportFile) ? '<p>详细测试报告（原始 HTML 格式）请查看邮件附件 <strong>report.html</strong>。</p>' : '<p>未能生成 HTML 测试报告，请查看构建日志。</p>'}
+<p>Jenkins 构建地址: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+<div class="email-footer">此邮件由 Jenkins 自动发送，请勿回复。</div>
+</body>
+</html>"""
+
+                        def attachPatterns = []
+                        if (reportFile && fileExists(reportFile)) {
+                            attachPatterns.add("reports/${BUILD_NUMBER}/engineering_*/report.html")
+                        }
+                        if (fileExists("reports/${BUILD_NUMBER}/official/engineering_*/report.html")) {
+                            attachPatterns.add("reports/${BUILD_NUMBER}/official/engineering_*/report.html")
+                        }
+                        if (fileExists("reports/${BUILD_NUMBER}/compare.html")) {
+                            attachPatterns.add("reports/${BUILD_NUMBER}/compare.html")
+                        }
+
+                        emailext(
+                            subject: "[GLM-5.3功能兼容性验收] ${params.MODEL} - 构建 #${BUILD_NUMBER} - ${resultLabel}${rateLabel != 'N/A' ? " (通过率 ${rateLabel})" : ''}",
+                            body: emailBody,
+                            to: "${params.RECIPIENTS}",
+                            mimeType: 'text/html',
+                            attachmentsPattern: attachPatterns.join(',')
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('清理旧构建') {
+            steps {
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    sh """
+ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} << 'ENDSSH'
+cd ${params.WORK_DIR}/builds/engineering/${params.TESTER} 2>/dev/null || exit 0
+# 目录层级 <model>/<build号>/：每个模型目录内只保留最近 20 个构建
+for MODEL_DIR in */ ; do
+    if [ -d "\$MODEL_DIR" ]; then
+        ( cd "\$MODEL_DIR" 2>/dev/null && ls -t | tail -n +21 | xargs -r rm -rf )
+        rmdir "\$MODEL_DIR" 2>/dev/null || true
+    fi
+done
+ENDSSH"""
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: "reports/${env.BUILD_NUMBER}/**", allowEmptyArchive: true, fingerprint: true
+        }
+        cleanup {
+            cleanWs()
+        }
+    }
+}

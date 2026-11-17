@@ -221,3 +221,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# 测试报告输出
+reports/
+test-results/
+
+# 本地 IDE 配置
+.idea/
