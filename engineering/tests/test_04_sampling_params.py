@@ -1,4 +1,4 @@
-"""#4 采样参数：temperature / top_p / max_tokens 行为与原厂一致。"""
+"""#4 采样参数：temperature / top_p / max_tokens 行为与官方一致。"""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def _top_logprobs(result) -> list | None:
 @pytest.mark.parametrize("extra", [{"temperature": 0.6}, {"temperature": 1.0}],
                          ids=["t=0.6", "t=1.0"])
 def test_04_distribution_vs_official(client, rec, official_client, settings, extra):
-    """与原厂对照：同 prompt 同参数的首 token 分布应一致（需 --official-*）"""
+    """与官方对照：同 prompt 同参数的首 token 分布应一致（需 --official-*）"""
     if official_client is None:
         pytest.skip("未配置 --official-base-url/--official-api-key/--official-model")
     req_v = _req(client.model, {**extra, "logprobs": True, "top_logprobs": 5, "max_tokens": 1})
@@ -60,21 +60,27 @@ def test_04_distribution_vs_official(client, rec, official_client, settings, ext
     rec.attach_result(req_v, res_v, client.chat_completions_url, client.masked_headers())
     rec.expect("供应商请求 2xx", res_v.ok)
     res_o = official_client.chat(req_o)
-    rec.expect("原厂请求 2xx", res_o.ok)
+    rec.expect("官方请求 2xx", res_o.ok)
     lp_v, lp_o = _top_logprobs(res_v), _top_logprobs(res_o)
     if lp_v is None or lp_o is None:
-        rec.check("两侧均返回 logprobs", False, "一侧不支持 logprobs", soft=True)
-        pytest.skip("一侧不支持 logprobs，无法做分布对照")
+        missing = []
+        if lp_v is None:
+            missing.append(f"供应商({client.model})")
+        if lp_o is None:
+            missing.append(f"官方({settings.official_model})")
+        side = "、".join(missing)
+        rec.check("两侧均返回 logprobs", False, f"{side} 未返回 logprobs", soft=True)
+        pytest.skip(f"{side} 不支持 logprobs，无法做分布对照")
     rec.extra["vendor_top_logprobs"] = lp_v
     rec.extra["official_top_logprobs"] = lp_o
     tokens_v = [t.get("token") for t in lp_v]
     tokens_o = [t.get("token") for t in lp_o]
-    rec.expect(f"{extra} 首 token top_logprobs 序列与原厂一致", tokens_v == tokens_o,
+    rec.expect(f"{extra} 首 token top_logprobs 序列与官方一致", tokens_v == tokens_o,
                f"vendor={tokens_v} vs official={tokens_o}")
 
 
 def test_04_max_tokens_behavior_vs_official(client, rec, official_client, settings):
-    """与原厂对照：相同 max_tokens 上限的截断行为应一致（需 --official-*）"""
+    """与官方对照：相同 max_tokens 上限的截断行为应一致（需 --official-*）"""
     if official_client is None:
         pytest.skip("未配置 --official-base-url/--official-api-key/--official-model")
     prompt = [{"role": "user", "content": "请从 1 数到 500，每个数字独占一行。"}]
