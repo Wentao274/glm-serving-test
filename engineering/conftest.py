@@ -136,7 +136,10 @@ def pytest_sessionfinish(session, exitstatus):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     data_path = out_dir / "report_data.json"
-    html_path = out_dir / "report.html"
+    # 报告命名：<model>_report_<yyyymmddhhmmss>.html（具备识别性）
+    safe_model = "".join(c if (c.isalnum() or c in "._-") else "_" for c in (settings.model if settings else "model"))
+    file_stamp = stamp.replace("_", "")
+    html_path = out_dir / f"{safe_model}_report_{file_stamp}.html"
 
     meta = {
         "模型": settings.model if settings else "?",
@@ -153,7 +156,7 @@ def pytest_sessionfinish(session, exitstatus):
 
     summary = collector.summary()
     print("\n" + "=" * 70)
-    print(f"功能兼容性验收报告已生成：")
+    print("功能兼容性验收报告已生成：")
     print(f"  HTML : {html_path}")
     print(f"  JSON : {data_path}")
     print(f"  汇总 : 共 {summary['total']} 例 | 通过 {summary['passed']} | "

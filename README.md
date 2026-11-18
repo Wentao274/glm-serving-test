@@ -38,7 +38,9 @@ python run_tests.py engineering \
     --model glm-5.3
 ```
 
-报告自动生成于 `reports/engineering_<时间戳>/`：`report.html`（汇总 + 每用例请求/响应/断言/curl 复现命令，可过滤搜索）+ `report_data.json`。
+报告自动生成于 `reports/engineering_<时间戳>/`：`<model>_report_<时间戳>.html`（如 `glm-5.3_report_20261118102035.html`，汇总 + 每用例请求/响应/断言/curl 复现命令，可过滤搜索）+ `report_data.json`。
+
+**官方双跑对比报告**：开启 `COMPARE_OFFICIAL` 后，`scripts/gen_compare.py` 生成 `<model>_compare_<时间戳>.html`——左右双通道布局（左栏供应商用例状态/请求响应详情，右栏官方同例详情），顶部含「供应商 vs 官方 对比汇总」统计（通过率、双边均通过/仅供应商失败/仅官方失败/双边均失败），支持"仅看不一致"过滤。
 
 ## 验收覆盖项（对齐《GLM-5.3 供应商自测基线标准》四、功能兼容性要求）
 

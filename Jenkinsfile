@@ -16,10 +16,10 @@ pipeline {
         // ---------------- 工程验收参数 ----------------
         string(name: 'ENG_FILTER', defaultValue: '', description: 'pytest -k 过滤表达式（空=全量），如 "test_07"、"test_05 or test_06"')
         booleanParam(name: 'INCLUDE_HEAVY', defaultValue: false, description: '运行重负载用例（#10 完整 1 小时流式保活验证）')
-        string(name: 'OFFICIAL_BASE_URL', defaultValue: '', description: '原厂 API 根地址（可选，用于 #4 采样参数对照与 COMPARE_OFFICIAL 双跑）')
-        password(name: 'OFFICIAL_API_KEY', defaultValue: '', description: '原厂 API Key（可选）')
-        string(name: 'OFFICIAL_MODEL', defaultValue: '', description: '原厂模型名（可选）')
-        booleanParam(name: 'COMPARE_OFFICIAL', defaultValue: false, description: '开启后全量用例在原厂渠道再跑一遍并逐用例对比（默认不比对；需配置 OFFICIAL_*）')
+        string(name: 'OFFICIAL_BASE_URL', defaultValue: '', description: '官方 API 根地址（可选，用于 #4 采样参数对照与 COMPARE_OFFICIAL 双跑）')
+        password(name: 'OFFICIAL_API_KEY', defaultValue: '', description: '官方 API Key（可选）')
+        string(name: 'OFFICIAL_MODEL', defaultValue: '', description: '官方模型名（可选）')
+        booleanParam(name: 'COMPARE_OFFICIAL', defaultValue: false, description: '开启后全量用例在官方渠道再跑一遍并逐用例对比（默认不比对；需配置 OFFICIAL_*）')
         string(name: 'COMPARE_FILTER', defaultValue: '', description: '对比模式的用例范围（-k 表达式，空=全量；设置后两侧均按此范围执行。示例："test_05 or test_07" 只对比流式计量与工具调用）')
 
         // ---------------- 通用 ----------------
@@ -61,8 +61,8 @@ pipeline {
                     println("BASE_URL:     ${params.BASE_URL}  (→ ${env.BASE_URL_V1})")
                     println("用例过滤:     ${params.ENG_FILTER ?: '(全量)'}")
                     println("重负载用例:   ${params.INCLUDE_HEAVY}")
-                    println("原厂对照:     ${params.OFFICIAL_BASE_URL ? params.OFFICIAL_BASE_URL : '(不启用)'}")
-                    println("原厂双跑对比: ${params.COMPARE_OFFICIAL ? "开启（范围: ${params.COMPARE_FILTER ?: '(全量)'}）" : '关闭'}")
+                    println("官方对照:     ${params.OFFICIAL_BASE_URL ? params.OFFICIAL_BASE_URL : '(不启用)'}")
+                    println("官方双跑对比: ${params.COMPARE_OFFICIAL ? "开启（范围: ${params.COMPARE_FILTER ?: '(全量)'}）" : '关闭'}")
                     println("服务描述:     ${params.DESCRIPTION ?: '(无)'}")
                     println("邮件接收者:   ${params.RECIPIENTS}")
                     println("工作目录:     ${params.WORK_DIR}")
@@ -237,14 +237,14 @@ ENDSSH"""
             }
         }
 
-        stage('原厂渠道对比执行') {
+        stage('官方渠道对比执行') {
             when {
                 expression { env.CONNECTIVITY_FAILED != 'true' && params.COMPARE_OFFICIAL }
             }
             steps {
                 script {
                     if (!params.OFFICIAL_BASE_URL?.trim() || !params.OFFICIAL_API_KEY?.toString()?.trim() || !params.OFFICIAL_MODEL?.trim()) {
-                        println("=== COMPARE_OFFICIAL 已启用但 OFFICIAL_* 未完整配置，跳过原厂对比执行 ===")
+                        println("=== COMPARE_OFFICIAL 已启用但 OFFICIAL_* 未完整配置，跳过官方对比执行 ===")
                         return
                     }
                     def officialBaseV1 = normalizeBaseUrl(params.OFFICIAL_BASE_URL)
@@ -332,7 +332,7 @@ fi
                         }
                         def gitSyncFailed = (codeVer.gitsync == 'failed')
 
-                        // 供应商 vs 原厂 对比汇总
+                        // 供应商 vs 官方 对比汇总
                         def cmp = [:]
                         def cmpFile = "reports/${BUILD_NUMBER}/compare.properties"
                         if (fileExists(cmpFile)) {
@@ -349,7 +349,7 @@ fi
                             def reason = !params.OFFICIAL_BASE_URL?.trim() ? '未配置 OFFICIAL_BASE_URL'
                                 : !params.OFFICIAL_API_KEY?.toString()?.trim() ? '未配置 OFFICIAL_API_KEY'
                                 : !params.OFFICIAL_MODEL?.trim() ? '未配置 OFFICIAL_MODEL'
-                                : '官方执行阶段未产出 compare.properties（请查看「原厂渠道对比执行」阶段日志：gen_compare 是否执行、两侧报告是否生成）'
+                                : '官方执行阶段未产出 compare.properties（请查看「官方渠道对比执行」阶段日志：gen_compare 是否执行、两侧报告是否生成）'
                             compareSection = """
 <div style="background-color: #ff9800; color: white; padding: 12px 15px; border-radius: 4px; margin-bottom: 12px;">
     <strong>官方对比未生成</strong>：COMPARE_OFFICIAL 已开启，但未找到对比结果。原因：${reason}。
@@ -360,20 +360,20 @@ fi
                         }
                         if (cmp) {
                             compareSection = """
-<h2>供应商 vs 原厂 对比汇总</h2>
+<h2>供应商 vs 官方 对比汇总</h2>
 <table>
     <tr><th></th><th>总用例</th><th>通过</th><th>通过率</th></tr>
     <tr><th>供应商</th><td>${cmp.vendortotal}</td><td>${cmp.vendorpassed}</td><td>${cmp.vendorrate}%</td></tr>
-    <tr><th>原厂</th><td>${cmp.officialtotal}</td><td>${cmp.officialpassed}</td><td>${cmp.officialrate}%</td></tr>
+    <tr><th>官方</th><td>${cmp.officialtotal}</td><td>${cmp.officialpassed}</td><td>${cmp.officialrate}%</td></tr>
     <tr><th>双边均通过</th><td colspan="2">${cmp.bothpass}</td></tr>
     <tr><th>仅供应商失败</th><td colspan="2" style="color:#dc2626">${cmp.vendoronlyfail}</td></tr>
-    <tr><th>仅原厂失败</th><td colspan="2">${cmp.officialonlyfail}</td></tr>
+    <tr><th>仅官方失败</th><td colspan="2">${cmp.officialonlyfail}</td></tr>
     <tr><th>双边均失败</th><td colspan="2">${cmp.bothfail}</td></tr>
 </table>
-<p>逐用例对比见附件 <strong>compare.html</strong>；两侧完整报告见附件（供应商 report.html / 原厂 report.html）。</p>"""
+<p>逐用例对比见附件 <strong>*_compare_*.html</strong>；两侧完整报告见附件（供应商 对比报告 *_compare_*.html）。</p>"""
                         }
 
-                        def reportFile = sh(script: "ls reports/${BUILD_NUMBER}/engineering_*/report.html 2>/dev/null | head -1", returnStdout: true).trim()
+                        def reportFile = sh(script: "ls reports/${BUILD_NUMBER}/engineering_*/*_report_*.html 2>/dev/null | head -1", returnStdout: true).trim()
 
                         def fallbackStyle = "body { font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif; margin: 0 auto; max-width: 1080px; padding: 20px 32px; color: #1f2937; background: #eef1f6; font-size: 14px; line-height: 1.7; }\ntable { border-collapse: collapse; width: 100%; margin: 14px 0 18px; background: #ffffff; font-size: 13px; border: 1px solid #d8dfeb; }\nth { background: #e3edfc; color: #1e3a8a; font-weight: 600; }\nth, td { border: 1px solid #d8dfeb; padding: 6px 12px; text-align: left; vertical-align: top; }\n.email-footer { margin-top: 24px; padding: 12px 15px; background-color: #f9f9f9; border-radius: 3px; color: #666; font-size: 12px; }"
 
@@ -416,7 +416,7 @@ ${gitSyncFailed ? "<div style='background-color: #ff9800; color: white; padding:
     <tr><th>构建状态</th><td>${currentBuild.currentResult}</td></tr>
 </table>
 ${compareSection}
-${reportFile && fileExists(reportFile) ? '<p>详细测试报告（原始 HTML 格式）请查看邮件附件 <strong>report.html</strong>。</p>' : '<p>未能生成 HTML 测试报告，请查看构建日志。</p>'}
+${reportFile && fileExists(reportFile) ? '<p>详细测试报告（原始 HTML 格式，&lt;model&gt;_report_&lt;时间戳&gt;.html）请查看邮件附件。</p>' : '<p>未能生成 HTML 测试报告，请查看构建日志。</p>'}
 <p>Jenkins 构建地址: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
 <div class="email-footer">此邮件由 Jenkins 自动发送，请勿回复。</div>
 </body>
@@ -424,13 +424,13 @@ ${reportFile && fileExists(reportFile) ? '<p>详细测试报告（原始 HTML �
 
                         def attachPatterns = []
                         if (reportFile && fileExists(reportFile)) {
-                            attachPatterns.add("reports/${BUILD_NUMBER}/engineering_*/report.html")
+                            attachPatterns.add("reports/${BUILD_NUMBER}/engineering_*/*_report_*.html")
                         }
-                        if (fileExists("reports/${BUILD_NUMBER}/official/engineering_*/report.html")) {
-                            attachPatterns.add("reports/${BUILD_NUMBER}/official/engineering_*/report.html")
+                        if (fileExists("reports/${BUILD_NUMBER}/official/engineering_*/*_report_*.html")) {
+                            attachPatterns.add("reports/${BUILD_NUMBER}/official/engineering_*/*_report_*.html")
                         }
-                        if (fileExists("reports/${BUILD_NUMBER}/compare.html")) {
-                            attachPatterns.add("reports/${BUILD_NUMBER}/compare.html")
+                        if (fileExists("reports/${BUILD_NUMBER}/*_compare_*.html")) {
+                            attachPatterns.add("reports/${BUILD_NUMBER}/*_compare_*.html")
                         }
 
                         emailext(
