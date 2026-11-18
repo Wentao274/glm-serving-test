@@ -38,47 +38,69 @@ def test_10_long_stream_alive(client, rec):
                f"finish_reason={result.finish_reason}")
 
 
-# 按 GLM 基线 TPOT(~14ms,约 70 tokens/s)估算：1 小时 ≈ 25 万 tokens，
-# 计数到 200000(约 70 万 tokens)足以覆盖 1 小时生成；max_tokens 取 262144(≈1h 生成量)
-_ONE_HOUR_S = 3600
-_TARGET = 200000
-_MAX_TOKENS_FOR_1H = 262144
+# 网关读超时上限判定常量
+_ONE_HOUR_S = 3600          # 上限：允许 ≤1h，超过才截
+_TOL_S = 3                  # 容忍窗口（±3s）：3597~3603 截止均判为"截于 1h"
+_LOWER_S = _ONE_HOUR_S - _TOL_S
+_UPPER_S = _ONE_HOUR_S + _TOL_S
+_TARGET = 99_999_999        # 超大计数目标（由 cap 决定流时长）
+_CAP_TOKENS = 131072        # 供应商 max_tokens 上限（build8 实测 [1, 131072]）
 
 
 @pytest.mark.heavy
 def test_10_one_hour_stream(client, rec, settings):
-    """heavy：单响应可持续 1 小时不被中断。
+    """heavy：网关读超时上限为 1h（允许 ≤1h，超过才截；容忍窗 ±3s）。
 
-    判定口径：
-    - 流活动（持续有 chunk）≥ 3600s 且无连接错误/中断 → 通过；
-    - 流在 3600s 前因 completion 上限/模型收尾而提前结束 → 记"无法验证"
-      （单响应 1h 连续性未被检验到，不构成供应商失败，需确认其 completion 上限）；
-    - 中途连接错误/超时/断流 → 失败。
+    判定（实测时长均注明）：
+    - 3597 ≤ 截止/自然结束 ≤ 3603（±3s 窗口内）→ 通过（截于 1h）；
+    - <3597 因 cap 自然结束（finish=length/stop）→ SKIPPED 并注明：
+      "未触达 1h 边界：流于 {t}s 因 completion 上限自然结束，上限 ≥ {t}s"；
+    - <3597 被非自然断流（连接重置/5xx）→ 失败（提前中断）；
+    - >3603 仍在流未被截断 → 失败（超过上限未被截断）。
     """
     if not settings.include_heavy:
         pytest.skip("需 --include-heavy 运行")
     req = _counting_req(client.model, _TARGET)
-    req["max_tokens"] = _MAX_TOKENS_FOR_1H
+    req["max_tokens"] = _CAP_TOKENS
     started = time.monotonic()
-    result = client.chat(req, timeout=75 * 60)
+    # 客户端超时须大于 3900 以便观测网关是否在 1h 处截断
+    result = client.chat(req, timeout=_UPPER_S + 600)
     duration = time.monotonic() - started
     rec.attach_result(req, result, client.chat_completions_url, client.masked_headers())
-    rec.extra["duration_s"] = round(duration, 1)
     completion = result.usage.get("completion_tokens", 0)
+    rec.extra["duration_s"] = round(duration, 1)
     rec.extra["completion_tokens"] = completion
+    rec.extra["finish_reason"] = result.finish_reason
+    rec.extra["note"] = f"判定窗口：允许 ≤{_ONE_HOUR_S}s，超过才截；容忍 ±{_TOL_S}s"
 
-    rec.expect("无中途连接错误/中断", result.error is None,
-               f"status={result.status_code} error={result.error}")
-    rec.expect("HTTP 2xx", result.ok, f"status={result.status_code} err={result.error}")
+    err = result.error
+    err_text = str(err).lower() if err else ""
+    is_timeout_cut = bool(err) and any(k in err_text for k in ("timeout", "timed out", "protocol", "read"))
 
-    if result.finish_reason in ("length", "stop") and duration < _ONE_HOUR_S:
+    # 分支 1：<3597 因 cap 自然结束（注明未触达）
+    if not err and result.finish_reason in ("length", "stop") and duration < _LOWER_S:
         pytest.skip(
-            f"无法验证 1 小时连续性：流于 {duration:.0f}s 提前结束"
+            f"未触达 1h 边界：流于 {duration:.0f}s 因 completion 上限自然结束"
             f"(finish={result.finish_reason}, completion_tokens={completion})。"
-            "单响应 1 小时不被中断未被检验到——需确认供应商 completion 上限是否 ≥ 1h 生成量"
+            f"网关读超时上限 ≥ {duration:.0f}s；受 cap 限制无法直接观测 1h 边界"
         )
 
-    rec.expect("单响应持续 1 小时不被中断（流活动 ≥ 3600s）",
-               duration >= _ONE_HOUR_S and result.n_chunks > 0,
-               f"duration={duration:.1f}s, finish={result.finish_reason}, "
-               f"n_chunks={result.n_chunks}, completion_tokens={completion}")
+    # 分支 2：<3597 被非自然断流 → 失败
+    if err and duration < _LOWER_S:
+        rec.expect("3597s 前未被提前断流", False,
+                   f"duration={duration:.1f}s 即断流（提前中断）: {err}")
+        return
+
+    # 分支 3：3597~3603 之间被截断或自然结束 → 通过（截于 1h）
+    if _LOWER_S <= duration <= _UPPER_S:
+        how = "被网关超时截断" if is_timeout_cut else "自然结束于 cap"
+        rec.expect("网关读超时上限为 1h（3597~3603 窗口内截止/截断）", True,
+                   f"duration={duration:.1f}s, {how}, finish={result.finish_reason}, "
+                   f"completion_tokens={completion}")
+        return
+
+    # 分支 4：>3603 仍在流未被截断 → 失败
+    rec.expect("超过 1h+容忍窗(3603s)未被截断",
+               duration <= _UPPER_S,
+               f"duration={duration:.1f}s 仍在流未被截断（超过上限未被截断）, "
+               f"finish={result.finish_reason}, error={err}")
