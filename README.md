@@ -81,7 +81,7 @@ python run_tests.py engineering \
 
 根目录 `Jenkinsfile` 为声明式流水线（仅 engineering 套件）：
 
-- **参数**:`TESTER`/`MODEL`/`BASE_URL`/`API_KEY`/`ENG_FILTER`(-k 过滤）/`INCLUDE_HEAVY`/`OFFICIAL_*`/`COMPARE_OFFICIAL`（原厂双跑对比，默认关）/`COMPARE_FILTER`（对比范围）
+- **参数**:`TESTER`/`MODEL`/`BASE_URL`/`API_KEY`/`ENG_FILTER`(-k 过滤）/`VENDOR_INCLUDE_HEAVY`(供应商侧 heavy)/`OFFICIAL_INCLUDE_HEAVY`(官方侧 heavy，独立开关)/`OFFICIAL_*`/`COMPARE_OFFICIAL`（原厂双跑对比，默认关）/`COMPARE_FILTER`（对比范围）
 - **流程**：打印参数 → API 连通性预检（失败即终止）→ 环境检查（清残留 / git pull 记录代码版本 / uv venv）→ 运行验收 → （可选）原厂渠道对比执行 → 报告拉取 → 邮件（正文汇总统计 + 对比汇总，report.html 原格式附件；git pull 失败醒目告警）→ 保留最近 20 构建
 - **输出**：远程机 `builds/engineering/<tester>/<model>/<构建号>/`
 
